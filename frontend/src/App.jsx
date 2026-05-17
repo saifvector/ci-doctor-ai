@@ -6,7 +6,9 @@ import DiagnosisCard from "./components/DiagnosisCard"
 import FixPanel from "./components/FixPanel"
 import PipelineList from "./components/PipelineList"
 
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3001/api"
+const API_BASE = window.location.hostname === "localhost"
+  ? "http://localhost:3001/api"
+  : "https://ci-doctor-ai.onrender.com/api"
 
 function App() {
   const [dashboard, setDashboard] = useState(null)
