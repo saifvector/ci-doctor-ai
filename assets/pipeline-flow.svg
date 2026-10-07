@@ -1,0 +1,166 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 360" width="100%" height="360">
+  <defs>
+    <linearGradient id="flowBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#070a14" />
+      <stop offset="100%" stop-color="#0f172a" />
+    </linearGradient>
+
+    <linearGradient id="cardGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1e293b" />
+      <stop offset="100%" stop-color="#0f172a" />
+    </linearGradient>
+
+    <linearGradient id="aiCardGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#2e1065" />
+      <stop offset="100%" stop-color="#0f172a" />
+    </linearGradient>
+
+    <filter id="softGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="4" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+
+    <style>
+      @keyframes travelRight {
+        0% { stroke-dashoffset: 48; }
+        100% { stroke-dashoffset: 0; }
+      }
+
+      @keyframes travelDown {
+        0% { stroke-dashoffset: 48; }
+        100% { stroke-dashoffset: 0; }
+      }
+
+      @keyframes pulseNode {
+        0%, 100% { transform: scale(1); opacity: 0.8; }
+        50% { transform: scale(1.15); opacity: 1; }
+      }
+
+      @keyframes radarSweep {
+        0% { opacity: 0.2; transform: rotate(0deg); }
+        50% { opacity: 0.8; }
+        100% { opacity: 0.2; transform: rotate(360deg); }
+      }
+
+      @keyframes ping {
+        0% { r: 3; opacity: 1; }
+        100% { r: 9; opacity: 0; }
+      }
+
+      .pulse-line-cyan {
+        stroke: #38bdf8;
+        stroke-dasharray: 6 6;
+        animation: travelRight 1.5s linear infinite;
+      }
+
+      .pulse-line-purple {
+        stroke: #c084fc;
+        stroke-dasharray: 6 6;
+        animation: travelRight 1.5s linear infinite;
+      }
+
+      .pulse-line-green {
+        stroke: #34d399;
+        stroke-dasharray: 6 6;
+        animation: travelRight 1.5s linear infinite;
+      }
+
+      .pulse-beacon {
+        animation: ping 2s cubic-bezier(0, 0, 0.2, 1) infinite;
+      }
+    </style>
+  </defs>
+
+  <!-- Container -->
+  <rect width="900" height="360" rx="16" fill="url(#flowBg)" stroke="#1e293b" stroke-width="1.5" />
+
+  <!-- Section Title -->
+  <text x="40" y="42" fill="#64748b" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace" font-size="11" font-weight="700" letter-spacing="1.5">SYSTEM ARCHITECTURE &amp; EXECUTION TOPOLOGY</text>
+
+  <!-- CONNECTOR BUS LINES -->
+  <!-- 1 to 2 -->
+  <path d="M 230 180 L 290 180" fill="none" class="pulse-line-cyan" stroke-width="2" />
+  <!-- 2 to 3 -->
+  <path d="M 470 180 L 530 180" fill="none" class="pulse-line-purple" stroke-width="2" />
+  <!-- 3 to 4 -->
+  <path d="M 710 180 L 770 180" fill="none" class="pulse-line-green" stroke-width="2" />
+
+  <!-- MODULE 1: GITHUB ACTIONS MONITOR -->
+  <g transform="translate(50, 80)">
+    <rect width="180" height="200" rx="12" fill="url(#cardGrad)" stroke="#334155" stroke-width="1" />
+    <rect width="180" height="4" rx="2" fill="#ef4444" />
+    
+    <!-- Status Header -->
+    <circle cx="24" cy="28" r="5" fill="#ef4444" />
+    <text x="38" y="32" fill="#f87171" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="700">GITHUB ACTIONS</text>
+    <text x="24" y="52" fill="#64748b" font-family="monospace" font-size="10">EVENT LISTENER</text>
+
+    <!-- Details -->
+    <rect x="16" y="68" width="148" height="32" rx="6" fill="#0b1020" stroke="#1e293b" stroke-width="1" />
+    <text x="26" y="88" fill="#94a3b8" font-family="monospace" font-size="10">workflow_run [fail]</text>
+
+    <rect x="16" y="108" width="148" height="32" rx="6" fill="#0b1020" stroke="#1e293b" stroke-width="1" />
+    <text x="26" y="128" fill="#94a3b8" font-family="monospace" font-size="10">deploy.yml / ci.yml</text>
+
+    <!-- Footer Tag -->
+    <text x="24" y="172" fill="#475569" font-family="monospace" font-size="9">STATUS: FAILED_RUN</text>
+  </g>
+
+  <!-- MODULE 2: LOG INGESTION & FILTER -->
+  <g transform="translate(290, 80)">
+    <rect width="180" height="200" rx="12" fill="url(#cardGrad)" stroke="#38bdf8" stroke-width="1" stroke-opacity="0.4" />
+    <rect width="180" height="4" rx="2" fill="#38bdf8" />
+
+    <circle cx="24" cy="28" r="5" fill="#38bdf8" />
+    <text x="38" y="32" fill="#38bdf8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="700">OCTOKIT BRIDGE</text>
+    <text x="24" y="52" fill="#64748b" font-family="monospace" font-size="10">LOG SLICING ENGINE</text>
+
+    <rect x="16" y="68" width="148" height="32" rx="6" fill="#0b1020" stroke="#1e293b" stroke-width="1" />
+    <text x="26" y="88" fill="#94a3b8" font-family="monospace" font-size="10">Get Step Metadata</text>
+
+    <rect x="16" y="108" width="148" height="32" rx="6" fill="#0b1020" stroke="#1e293b" stroke-width="1" />
+    <text x="26" y="128" fill="#94a3b8" font-family="monospace" font-size="10">3,000 Char Log Tail</text>
+
+    <text x="24" y="172" fill="#475569" font-family="monospace" font-size="9">FILTER: ANSI STRIPPED</text>
+  </g>
+
+  <!-- MODULE 3: AI DIAGNOSTIC ENGINE -->
+  <g transform="translate(530, 80)">
+    <rect width="180" height="200" rx="12" fill="url(#aiCardGrad)" stroke="#a855f7" stroke-width="1" stroke-opacity="0.5" />
+    <rect width="180" height="4" rx="2" fill="#c084fc" />
+
+    <circle cx="24" cy="28" r="5" fill="#c084fc" />
+    <text x="38" y="32" fill="#c084fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="700">GEMINI 2.0 FLASH</text>
+    <text x="24" y="52" fill="#94a3b8" font-family="monospace" font-size="10">REASONING CORE</text>
+
+    <rect x="16" y="68" width="148" height="32" rx="6" fill="#0b1020" stroke="#3b0764" stroke-width="1" />
+    <text x="26" y="88" fill="#e9d5ff" font-family="monospace" font-size="10">Root Cause Extract</text>
+
+    <rect x="16" y="108" width="148" height="32" rx="6" fill="#0b1020" stroke="#3b0764" stroke-width="1" />
+    <text x="26" y="128" fill="#e9d5ff" font-family="monospace" font-size="10">Heuristic Fallback</text>
+
+    <text x="24" y="172" fill="#9333ea" font-family="monospace" font-size="9">CONFIDENCE: ESTIMATED</text>
+  </g>
+
+  <!-- MODULE 4: RECOVERY & PATCH ENGINE -->
+  <g transform="translate(770, 80)">
+    <rect width="90" height="200" rx="12" fill="url(#cardGrad)" stroke="#34d399" stroke-width="1" stroke-opacity="0.4" />
+    <rect width="90" height="4" rx="2" fill="#34d399" />
+
+    <circle cx="20" cy="28" r="5" fill="#34d399" />
+    <text x="32" y="32" fill="#34d399" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="11" font-weight="700">DIFF</text>
+
+    <rect x="10" y="68" width="70" height="32" rx="6" fill="#0b1020" stroke="#1e293b" stroke-width="1" />
+    <text x="18" y="88" fill="#86efac" font-family="monospace" font-size="9">+Patch</text>
+
+    <rect x="10" y="108" width="70" height="32" rx="6" fill="#0b1020" stroke="#1e293b" stroke-width="1" />
+    <text x="18" y="128" fill="#38bdf8" font-family="monospace" font-size="9">PR Data</text>
+
+    <text x="12" y="172" fill="#475569" font-family="monospace" font-size="8">READY</text>
+  </g>
+
+  <!-- Bottom Metric Bar -->
+  <g transform="translate(50, 310)">
+    <text x="0" y="14" fill="#64748b" font-family="monospace" font-size="10">[INPUT: GITHUB ACTIONS LOG] ---> [REASONING: GEMINI 2.0 FLASH / PATTERN REGEX] ---> [OUTPUT: UNIFIED GIT DIFF + PR SPEC]</text>
+  </g>
+</svg>
