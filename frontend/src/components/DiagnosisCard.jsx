@@ -1,4 +1,4 @@
-import { Bot, FileWarning, Sparkles, Loader2, Code2, FileCode } from "lucide-react"
+import { Bot, FileWarning, Sparkles, Loader2, Code2, FileCode, Layers } from "lucide-react"
 
 function DiagnosisCard({ data, loading, onDiagnose, hasFailureData }) {
   if (loading) {
@@ -101,14 +101,14 @@ function DiagnosisCard({ data, loading, onDiagnose, hasFailureData }) {
         <p className="text-sm text-gray-300 leading-7">{data.rootCause}</p>
       </div>
 
-      {/* CONFIDENCE + RISK + CATEGORY */}
-      <div className="grid grid-cols-3 gap-3 mb-5">
+      {/* CONFIDENCE + RISK + CATEGORY + DETECTED STACK */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
         {/* CONFIDENCE */}
         <div className="bg-green-500/10 border border-green-500/20 rounded-2xl p-3.5">
           <p className="text-[10px] text-green-300 uppercase tracking-wider mb-1 font-mono">
             Confidence
           </p>
-          <h3 className="text-2xl font-bold text-green-400 font-mono">
+          <h3 className="text-xl font-bold text-green-400 font-mono">
             {data.confidence}
           </h3>
         </div>
@@ -130,6 +130,17 @@ function DiagnosisCard({ data, loading, onDiagnose, hasFailureData }) {
           </p>
           <h3 className="text-xs font-bold text-blue-300 uppercase font-mono truncate">
             {data.category || "UNKNOWN"}
+          </h3>
+        </div>
+
+        {/* DETECTED PROJECT STACK */}
+        <div className="bg-cyan-500/10 border border-cyan-500/20 rounded-2xl p-3.5">
+          <p className="text-[10px] text-cyan-300 uppercase tracking-wider mb-1 font-mono flex items-center gap-1">
+            <Layers className="w-3 h-3 text-cyan-400" />
+            <span>Stack</span>
+          </p>
+          <h3 className="text-xs font-bold text-cyan-300 uppercase font-mono truncate" title={data.projectType || "Node.js"}>
+            {data.projectType || "Node.js"}
           </h3>
         </div>
       </div>

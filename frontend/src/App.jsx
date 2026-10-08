@@ -313,7 +313,10 @@ function App() {
       const data = await res.json()
       if (!res.ok) {
         console.error("PR Apply error:", data.error)
-        setError(data.error || "Failed to create Pull Request")
+        const detailedMsg = data.validationErrors?.length
+          ? `${data.error}: ${data.validationErrors.join("; ")}`
+          : data.error || "Failed to create Pull Request"
+        setError(detailedMsg)
         return
       }
       setPrResult(data)

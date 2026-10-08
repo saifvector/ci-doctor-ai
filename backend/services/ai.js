@@ -1,6 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import dotenv from 'dotenv'
-import { validateFix } from './fixValidator.js'
+import { verifyFix, detectProjectType } from './fixVerification.js'
 
 dotenv.config()
 
@@ -47,6 +47,7 @@ async function retryWithBackoff(fn, maxRetries = 3) {
  * Analyze CI/CD failure logs and generate a grounded diagnosis
  */
 export async function diagnosePipeline(runDetails, logs, groundedFiles = []) {
+  const projectType = detectProjectType(groundedFiles, runDetails)
   const fileContextString = Array.isArray(groundedFiles) && groundedFiles.length > 0
     ? groundedFiles.map((f) => `--- File: ${f.path} ---\n${f.content}`).join('\n\n')
     : null
@@ -59,6 +60,7 @@ export async function diagnosePipeline(runDetails, logs, groundedFiles = []) {
 - Commit: ${runDetails.commit} - ${runDetails.commitMessage}
 - Author: ${runDetails.author}
 - Duration: ${runDetails.duration}
+- Detected Stack: ${projectType}
 - Stages: ${JSON.stringify(runDetails.stages)}
 
 ## Error Logs
@@ -104,6 +106,7 @@ Be specific and technical. Reference exact file names, line numbers, missing var
         riskLevel: diagnosis.riskLevel || 'Medium',
         recommendation: diagnosis.recommendation || 'Review the error logs manually',
         category: diagnosis.category || 'unknown',
+        projectType,
         supportingEvidence: Array.isArray(diagnosis.supportingEvidence) ? diagnosis.supportingEvidence : [],
         groundedFilesCount: (groundedFiles || []).length,
       }
@@ -120,6 +123,7 @@ Be specific and technical. Reference exact file names, line numbers, missing var
  * Generate a fix/patch for a diagnosed pipeline failure
  */
 export async function generateFix(runDetails, logs, diagnosis, groundedFiles = []) {
+  const projectType = detectProjectType(groundedFiles, runDetails)
   const fileContextString = Array.isArray(groundedFiles) && groundedFiles.length > 0
     ? groundedFiles.map((f) => `--- File: ${f.path} ---\n${f.content}`).join('\n\n')
     : null
@@ -131,6 +135,7 @@ export async function generateFix(runDetails, logs, diagnosis, groundedFiles = [
 - Branch: ${runDetails.branch}
 - Commit: ${runDetails.commit} - ${runDetails.commitMessage}
 - Author: ${runDetails.author}
+- Detected Stack: ${projectType}
 
 ## Error Logs
 ${logs}
@@ -193,9 +198,13 @@ Be specific. Show actual code changes in the diff.`
     generatedFix = generateFallbackFix(runDetails, logs, diagnosis, groundedFiles)
   }
 
-  // Run automated fix validation suite
-  const validation = validateFix(generatedFix, groundedFiles)
-  generatedFix.validation = validation
+  // Run comprehensive Verification Engine
+  const verification = verifyFix(generatedFix, groundedFiles, runDetails)
+  generatedFix.verification = verification
+  generatedFix.validation = verification // Backward compatibility
+  if (verification.confidenceScore) {
+    generatedFix.confidence = `${verification.confidenceScore}%`
+  }
 
   return generatedFix
 }
@@ -206,13 +215,13 @@ Be specific. Show actual code changes in the diff.`
 function generateFallbackDiagnosis(runDetails, logs, groundedFiles = []) {
   const logText = (logs || '').toLowerCase()
   const groundedCount = (groundedFiles || []).length
+  const projectType = detectProjectType(groundedFiles, runDetails)
 
   // Find package.json in grounded files if present
   const pkgFile = (groundedFiles || []).find((f) => f.path.endsWith('package.json'))
   const workflowFile = (groundedFiles || []).find((f) => f.path.includes('.github/workflows'))
 
   if (logText.includes('missing script') && logText.includes('test')) {
-    // Extract scripts line range from grounded package.json if available
     let snippet = '"scripts": {\n  "dev": "vite",\n  "build": "vite build",\n  "lint": "eslint ."\n}'
     let lineRange = 'L12-L17'
 
@@ -236,6 +245,7 @@ function generateFallbackDiagnosis(runDetails, logs, groundedFiles = []) {
       recommendation:
         'Add a "test" script to package.json, or update the workflow to run "npm test --if-present".',
       category: 'configuration',
+      projectType,
       groundedFilesCount: groundedCount,
       supportingEvidence: [
         {
@@ -272,6 +282,7 @@ function generateFallbackDiagnosis(runDetails, logs, groundedFiles = []) {
       recommendation:
         'Add API_KEY to repository GitHub Actions Secrets and map it as an environment variable in the workflow YAML.',
       category: 'environment',
+      projectType,
       groundedFilesCount: groundedCount,
       supportingEvidence: [
         {
@@ -295,6 +306,7 @@ function generateFallbackDiagnosis(runDetails, logs, groundedFiles = []) {
       recommendation:
         'Ensure the package is declared in package.json dependencies and verify the import specifier.',
       category: 'dependency',
+      projectType,
       groundedFilesCount: groundedCount,
       supportingEvidence: [
         {
@@ -318,6 +330,7 @@ function generateFallbackDiagnosis(runDetails, logs, groundedFiles = []) {
       recommendation:
         'Resolve the ESLint rule violations flagged in the logs or run "npm run lint -- --fix".',
       category: 'syntax',
+      projectType,
       groundedFilesCount: groundedCount,
       supportingEvidence: [
         {
@@ -340,6 +353,7 @@ function generateFallbackDiagnosis(runDetails, logs, groundedFiles = []) {
     recommendation:
       'Inspect the error logs to pinpoint the exact failing command and apply remediation.',
     category: 'unknown',
+    projectType,
     groundedFilesCount: groundedCount,
     supportingEvidence: [
       {

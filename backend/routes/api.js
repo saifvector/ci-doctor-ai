@@ -10,6 +10,7 @@ import {
 import { diagnosePipeline, generateFix } from '../services/ai.js'
 import { resolveRelevantFiles } from '../services/contextResolver.js'
 import { fetchGroundedFiles } from '../services/fileGrounding.js'
+import { verifyFix } from '../services/fixVerification.js'
 import store from '../services/store.js'
 
 const router = Router()
@@ -117,6 +118,7 @@ router.get('/pipelines', async (req, res) => {
         ...run,
         hasDiagnosis: !!diagnosis,
         hasFix: !!fix,
+        fixVerification: fix?.verification || null,
       }
     })
 
@@ -191,7 +193,7 @@ router.post('/pipelines/:id/diagnose', async (req, res) => {
 
 /**
  * POST /api/pipelines/:id/fix
- * Generate AI fix for a diagnosed pipeline failure
+ * Generate AI fix for a diagnosed pipeline failure and verify it
  */
 router.post('/pipelines/:id/fix', async (req, res) => {
   try {
@@ -232,8 +234,40 @@ router.post('/pipelines/:id/fix', async (req, res) => {
 })
 
 /**
+ * POST /api/pipelines/:id/verify
+ * Dedicated verification engine endpoint to re-verify or evaluate fix
+ */
+router.post('/pipelines/:id/verify', async (req, res) => {
+  try {
+    const { owner, repo } = resolveRepo(req)
+    const token = resolveToken(req)
+    const runId = parseInt(req.params.id)
+
+    const fix = req.body.fix || store.getFix(runId)
+    if (!fix) {
+      return res.status(404).json({ error: 'No fix found to verify' })
+    }
+
+    const details = await getRunDetails(runId, owner, repo, token)
+    const logs = await getRunLogs(runId, owner, repo, token)
+    const { candidateFiles } = resolveRelevantFiles(logs, details)
+    const groundedFiles = await fetchGroundedFiles(candidateFiles, owner, repo, token)
+
+    const verification = verifyFix(fix, groundedFiles, details)
+    fix.verification = verification
+    fix.validation = verification
+    store.saveFix(runId, fix)
+
+    res.json({ verification, fix })
+  } catch (error) {
+    console.error('Verification error:', error.message)
+    res.status(500).json({ error: 'Failed to verify fix: ' + error.message })
+  }
+})
+
+/**
  * POST /api/fixes/apply
- * Apply fix and create Pull Request on GitHub
+ * Apply fix and create Pull Request on GitHub with Safety Gating
  */
 router.post('/fixes/apply', async (req, res) => {
   try {
@@ -242,6 +276,22 @@ router.post('/fixes/apply', async (req, res) => {
 
     if (!runId || !fix) {
       return res.status(400).json({ error: 'runId and fix object are required' })
+    }
+
+    // Safety Gate: block PR creation if verification critically failed
+    if (fix.verification && fix.verification.validationPassed === false) {
+      return res.status(422).json({
+        error: 'Pull Request blocked: fix failed critical pre-merge verification checks',
+        validationPassed: false,
+        validationErrors: fix.verification.validationErrors || [],
+        summary: fix.verification.summary,
+      })
+    }
+
+    if (!fix.filesChanged || fix.filesChanged.length === 0) {
+      return res.status(422).json({
+        error: 'Pull Request blocked: no valid files specified in changeset',
+      })
     }
 
     const token = resolveToken(req)
