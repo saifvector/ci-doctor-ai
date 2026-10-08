@@ -1,4 +1,4 @@
-import { Bot, FileWarning, Sparkles, Loader2 } from "lucide-react"
+import { Bot, FileWarning, Sparkles, Loader2, Code2, FileCode } from "lucide-react"
 
 function DiagnosisCard({ data, loading, onDiagnose, hasFailureData }) {
   if (loading) {
@@ -151,6 +151,56 @@ function DiagnosisCard({ data, loading, onDiagnose, hasFailureData }) {
                 className="bg-[#0B1020] border border-gray-800 rounded-xl px-3.5 py-2 font-mono text-xs text-gray-300"
               >
                 {file}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* GROUNDED EVIDENCE / CODE CITATIONS */}
+      {data.supportingEvidence && data.supportingEvidence.length > 0 && (
+        <div className="bg-black/25 border border-cyan-500/20 rounded-2xl p-5 mb-5 shadow-inner">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <Code2 className="w-4 h-4 text-cyan-400" />
+              <h3 className="text-xs font-semibold text-cyan-400 uppercase tracking-wider font-mono">
+                Grounded Repository Evidence ({data.supportingEvidence.length})
+              </h3>
+            </div>
+            <span className="text-[10px] text-cyan-300 font-mono bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/20">
+              CODE-VERIFIED
+            </span>
+          </div>
+
+          <div className="space-y-3">
+            {data.supportingEvidence.map((ev, index) => (
+              <div
+                key={index}
+                className="bg-[#0B1020] border border-gray-800 rounded-xl p-3.5 space-y-2"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-xs text-white font-medium flex items-center gap-1.5">
+                    <FileCode className="w-3.5 h-3.5 text-cyan-400" />
+                    {ev.file}
+                  </span>
+                  {ev.lineRange && (
+                    <span className="text-[10px] font-mono bg-gray-800 text-gray-300 px-2 py-0.5 rounded border border-gray-700">
+                      {ev.lineRange}
+                    </span>
+                  )}
+                </div>
+
+                {ev.snippet && (
+                  <pre className="text-xs font-mono bg-black/40 border border-gray-800/80 rounded-lg p-2.5 text-cyan-200/90 overflow-x-auto whitespace-pre-wrap leading-5">
+                    {ev.snippet}
+                  </pre>
+                )}
+
+                {ev.explanation && (
+                  <p className="text-xs text-gray-400 leading-relaxed pt-1">
+                    <strong className="text-gray-300">Grounding Rationale:</strong> {ev.explanation}
+                  </p>
+                )}
               </div>
             ))}
           </div>

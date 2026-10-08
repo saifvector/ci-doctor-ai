@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
+import { AlertCircle } from "lucide-react"
 import Navbar from "./components/Navbar"
 import StatusCards from "./components/StatusCards"
 import FailurePanel from "./components/FailurePanel"
@@ -37,6 +38,9 @@ function App() {
   const [fix, setFix] = useState(null)
   const [prResult, setPrResult] = useState(null)
 
+  const [autoRefresh, setAutoRefresh] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+
   const [loading, setLoading] = useState({
     dashboard: true,
     pipelines: true,
@@ -47,29 +51,9 @@ function App() {
   })
   const [error, setError] = useState(null)
 
-  // Auth setup on mount
+  const activeRepoRef = useRef(activeRepo)
   useEffect(() => {
-    // Check URL parameters for OAuth session token
-    const params = new URLSearchParams(window.location.search)
-    const sessionParam = params.get("session")
-    if (sessionParam) {
-      localStorage.setItem("ci_doctor_session", sessionParam)
-      // Clean query string from browser bar
-      window.history.replaceState({}, document.title, window.location.pathname)
-    }
-
-    fetchCurrentUser()
-    fetchRepositories()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  // Refetch data when active repository changes
-  useEffect(() => {
-    if (activeRepo) {
-      fetchDashboard(activeRepo)
-      fetchPipelines(activeRepo)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    activeRepoRef.current = activeRepo
   }, [activeRepo])
 
   function getAuthHeader() {
@@ -77,7 +61,7 @@ function App() {
     return session ? { Authorization: `Bearer ${session}` } : {}
   }
 
-  async function fetchCurrentUser() {
+  const fetchCurrentUser = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/auth/me`, {
         headers: getAuthHeader(),
@@ -89,9 +73,9 @@ function App() {
     } catch (err) {
       console.warn("Auth check failed:", err.message)
     }
-  }
+  }, [])
 
-  async function fetchRepositories() {
+  const fetchRepositories = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/repos`, {
         headers: getAuthHeader(),
@@ -102,6 +86,114 @@ function App() {
       }
     } catch (err) {
       console.warn("Repos fetch failed:", err.message)
+    }
+  }, [])
+
+  const fetchDashboard = useCallback(async (repoObj = activeRepoRef.current, quiet = false) => {
+    try {
+      if (!quiet) setLoading((prev) => ({ ...prev, dashboard: true }))
+      const query = `?owner=${encodeURIComponent(repoObj.owner)}&repo=${encodeURIComponent(repoObj.repo)}`
+      const res = await fetch(`${API_BASE}/dashboard${query}`, {
+        headers: getAuthHeader(),
+      })
+      const data = await res.json()
+      setDashboard(data)
+    } catch (err) {
+      console.error("Dashboard fetch failed:", err)
+      if (!quiet) setError("Failed to connect to backend. Is it running on port 3001?")
+    } finally {
+      if (!quiet) setLoading((prev) => ({ ...prev, dashboard: false }))
+    }
+  }, [])
+
+  const selectPipeline = useCallback(async (runId, repoObj = activeRepoRef.current) => {
+    setSelectedRun(runId)
+    setDiagnosis(null)
+    setFix(null)
+    setPrResult(null)
+
+    try {
+      setLoading((prev) => ({ ...prev, failure: true }))
+      const query = `?owner=${encodeURIComponent(repoObj.owner)}&repo=${encodeURIComponent(repoObj.repo)}`
+      const res = await fetch(`${API_BASE}/pipelines/${runId}/failure${query}`, {
+        headers: getAuthHeader(),
+      })
+      const data = await res.json()
+      setFailureData(data)
+    } catch (err) {
+      console.error("Failure fetch failed:", err)
+    } finally {
+      setLoading((prev) => ({ ...prev, failure: false }))
+    }
+  }, [])
+
+  const fetchPipelines = useCallback(async (repoObj = activeRepoRef.current, quiet = false) => {
+    try {
+      if (!quiet) setLoading((prev) => ({ ...prev, pipelines: true }))
+      const query = `?owner=${encodeURIComponent(repoObj.owner)}&repo=${encodeURIComponent(repoObj.repo)}`
+      const res = await fetch(`${API_BASE}/pipelines${query}`, {
+        headers: getAuthHeader(),
+      })
+      const data = await res.json()
+      const runs = data.runs || []
+      setPipelines(runs)
+
+      // Auto-select first failed pipeline if none currently selected
+      if (!selectedRun) {
+        const firstFailed = runs.find((r) => r.conclusion === "failure")
+        if (firstFailed) {
+          selectPipeline(firstFailed.id, repoObj)
+        }
+      }
+    } catch (err) {
+      console.error("Pipelines fetch failed:", err)
+    } finally {
+      if (!quiet) setLoading((prev) => ({ ...prev, pipelines: false }))
+    }
+  }, [selectedRun, selectPipeline])
+
+  // Auth setup on mount
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const sessionParam = params.get("session")
+    if (sessionParam) {
+      localStorage.setItem("ci_doctor_session", sessionParam)
+      window.history.replaceState({}, document.title, window.location.pathname)
+    }
+
+    fetchCurrentUser()
+    fetchRepositories()
+  }, [fetchCurrentUser, fetchRepositories])
+
+  // Refetch data when active repository changes
+  useEffect(() => {
+    if (activeRepo) {
+      fetchDashboard(activeRepo)
+      fetchPipelines(activeRepo)
+    }
+  }, [activeRepo, fetchDashboard, fetchPipelines])
+
+  // Automated monitoring poll every 30s
+  useEffect(() => {
+    if (!autoRefresh) return
+
+    const interval = setInterval(() => {
+      fetchDashboard(activeRepoRef.current, true)
+      fetchPipelines(activeRepoRef.current, true)
+    }, 30000)
+
+    return () => clearInterval(interval)
+  }, [autoRefresh, fetchDashboard, fetchPipelines])
+
+  async function handleManualRefresh() {
+    setRefreshing(true)
+    try {
+      await Promise.all([
+        fetchDashboard(activeRepo, true),
+        fetchPipelines(activeRepo, true),
+      ])
+    } finally {
+      setRefreshing(false)
     }
   }
 
@@ -136,66 +228,6 @@ function App() {
     }
   }
 
-  async function fetchDashboard(repoObj = activeRepo) {
-    try {
-      setLoading((prev) => ({ ...prev, dashboard: true }))
-      const query = `?owner=${encodeURIComponent(repoObj.owner)}&repo=${encodeURIComponent(repoObj.repo)}`
-      const res = await fetch(`${API_BASE}/dashboard${query}`, {
-        headers: getAuthHeader(),
-      })
-      const data = await res.json()
-      setDashboard(data)
-    } catch (err) {
-      console.error("Dashboard fetch failed:", err)
-      setError("Failed to connect to backend. Is it running on port 3001?")
-    } finally {
-      setLoading((prev) => ({ ...prev, dashboard: false }))
-    }
-  }
-
-  async function fetchPipelines(repoObj = activeRepo) {
-    try {
-      setLoading((prev) => ({ ...prev, pipelines: true }))
-      const query = `?owner=${encodeURIComponent(repoObj.owner)}&repo=${encodeURIComponent(repoObj.repo)}`
-      const res = await fetch(`${API_BASE}/pipelines${query}`, {
-        headers: getAuthHeader(),
-      })
-      const data = await res.json()
-      setPipelines(data.runs || [])
-
-      // Auto-select first failed pipeline
-      const firstFailed = (data.runs || []).find((r) => r.conclusion === "failure")
-      if (firstFailed) {
-        selectPipeline(firstFailed.id, repoObj)
-      }
-    } catch (err) {
-      console.error("Pipelines fetch failed:", err)
-    } finally {
-      setLoading((prev) => ({ ...prev, pipelines: false }))
-    }
-  }
-
-  async function selectPipeline(runId, repoObj = activeRepo) {
-    setSelectedRun(runId)
-    setDiagnosis(null)
-    setFix(null)
-    setPrResult(null)
-
-    try {
-      setLoading((prev) => ({ ...prev, failure: true }))
-      const query = `?owner=${encodeURIComponent(repoObj.owner)}&repo=${encodeURIComponent(repoObj.repo)}`
-      const res = await fetch(`${API_BASE}/pipelines/${runId}/failure${query}`, {
-        headers: getAuthHeader(),
-      })
-      const data = await res.json()
-      setFailureData(data)
-    } catch (err) {
-      console.error("Failure fetch failed:", err)
-    } finally {
-      setLoading((prev) => ({ ...prev, failure: false }))
-    }
-  }
-
   async function runDiagnosis() {
     if (!selectedRun) return
     try {
@@ -219,7 +251,7 @@ function App() {
       }
       setDiagnosis(data.diagnosis)
       setError(null)
-      fetchDashboard(activeRepo)
+      fetchDashboard(activeRepo, true)
     } catch (err) {
       console.error("Diagnosis failed:", err)
       setError("Failed to run AI diagnosis. Check backend logs.")
@@ -251,7 +283,7 @@ function App() {
       }
       setFix(data.fix)
       setError(null)
-      fetchDashboard(activeRepo)
+      fetchDashboard(activeRepo, true)
     } catch (err) {
       console.error("Fix generation failed:", err)
       setError("Failed to generate AI fix. Check backend logs.")
@@ -286,7 +318,7 @@ function App() {
       }
       setPrResult(data)
       setError(null)
-      fetchDashboard(activeRepo)
+      fetchDashboard(activeRepo, true)
     } catch (err) {
       console.error("Apply fix failed:", err)
       setError("Failed to create Pull Request: " + err.message)
@@ -308,11 +340,12 @@ function App() {
       />
 
       <div className="max-w-7xl mx-auto px-6 py-6">
-        {/* Error Banner */}
+        {/* Error Banner without emojis */}
         {error && (
           <div className="mb-6 bg-red-500/10 border border-red-500/20 rounded-2xl p-4 flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <span className="text-red-400 text-sm">⚠️ {error}</span>
+              <AlertCircle className="w-5 h-5 text-red-400 shrink-0" />
+              <span className="text-red-300 text-sm">{error}</span>
             </div>
             <button
               onClick={() => {
@@ -330,12 +363,16 @@ function App() {
         {/* Status Cards */}
         <StatusCards data={dashboard} loading={loading.dashboard} />
 
-        {/* Pipeline List */}
+        {/* Pipeline List with Auto-Refresh and Manual Refresh */}
         <PipelineList
           pipelines={pipelines}
           loading={loading.pipelines}
           selectedRun={selectedRun}
           onSelectPipeline={(id) => selectPipeline(id, activeRepo)}
+          onRefresh={handleManualRefresh}
+          refreshing={refreshing}
+          autoRefresh={autoRefresh}
+          onToggleAutoRefresh={() => setAutoRefresh((prev) => !prev)}
         />
 
         {/* Main Content - Failure + Diagnosis + Fix + PR */}

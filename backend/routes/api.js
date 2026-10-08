@@ -5,10 +5,11 @@ import {
   getRunLogs,
   getDashboardStats,
   getUserRepositories,
-  getRepoFileContent,
   applyFixAndCreatePR,
 } from '../services/github.js'
 import { diagnosePipeline, generateFix } from '../services/ai.js'
+import { resolveRelevantFiles } from '../services/contextResolver.js'
+import { fetchGroundedFiles } from '../services/fileGrounding.js'
 import store from '../services/store.js'
 
 const router = Router()
@@ -17,6 +18,17 @@ function resolveRepo(req) {
   const owner = req.query.owner || req.body?.owner || process.env.GITHUB_OWNER || 'techenthusiasticindia'
   const repo = req.query.repo || req.body?.repo || process.env.GITHUB_REPO || 'ci-doctor-ai'
   return { owner, repo }
+}
+
+function resolveToken(req) {
+  const authHeader = req.headers.authorization
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.slice(7).trim()
+    if (token && token !== 'null' && token !== 'undefined') {
+      return token
+    }
+  }
+  return null
 }
 
 /**
@@ -37,8 +49,7 @@ router.get('/health', (req, res) => {
  */
 router.get('/repos', async (req, res) => {
   try {
-    const authHeader = req.headers.authorization
-    const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null
+    const token = resolveToken(req)
     const username = req.query.username || process.env.GITHUB_OWNER || 'techenthusiasticindia'
 
     const repos = await getUserRepositories(token, username)
@@ -68,7 +79,8 @@ router.post('/repos/select', (req, res) => {
 router.get('/dashboard', async (req, res) => {
   try {
     const { owner, repo } = resolveRepo(req)
-    const githubStats = await getDashboardStats(owner, repo)
+    const token = resolveToken(req)
+    const githubStats = await getDashboardStats(owner, repo, token)
     const storeStats = store.getStats()
     const avgConfidence = store.getAverageConfidence()
 
@@ -93,8 +105,9 @@ router.get('/dashboard', async (req, res) => {
 router.get('/pipelines', async (req, res) => {
   try {
     const { owner, repo } = resolveRepo(req)
+    const token = resolveToken(req)
     const limit = parseInt(req.query.limit) || 20
-    const runs = await getWorkflowRuns(owner, repo, limit)
+    const runs = await getWorkflowRuns(owner, repo, limit, token)
 
     // Enrich with cached diagnosis info
     const enrichedRuns = runs.map((run) => {
@@ -121,9 +134,10 @@ router.get('/pipelines', async (req, res) => {
 router.get('/pipelines/:id/failure', async (req, res) => {
   try {
     const { owner, repo } = resolveRepo(req)
+    const token = resolveToken(req)
     const runId = parseInt(req.params.id)
-    const details = await getRunDetails(runId, owner, repo)
-    const logs = await getRunLogs(runId, owner, repo)
+    const details = await getRunDetails(runId, owner, repo, token)
+    const logs = await getRunLogs(runId, owner, repo, token)
 
     res.json({
       pipeline: details,
@@ -138,11 +152,12 @@ router.get('/pipelines/:id/failure', async (req, res) => {
 
 /**
  * POST /api/pipelines/:id/diagnose
- * Trigger AI diagnosis of a failed pipeline run with grounded context
+ * Trigger AI diagnosis of a failed pipeline run with grounded repository files
  */
 router.post('/pipelines/:id/diagnose', async (req, res) => {
   try {
     const { owner, repo } = resolveRepo(req)
+    const token = resolveToken(req)
     const runId = parseInt(req.params.id)
 
     // Check cache first
@@ -152,24 +167,17 @@ router.post('/pipelines/:id/diagnose', async (req, res) => {
     }
 
     // Fetch run details and logs
-    const details = await getRunDetails(runId, owner, repo)
-    const logs = await getRunLogs(runId, owner, repo)
+    const details = await getRunDetails(runId, owner, repo, token)
+    const logs = await getRunLogs(runId, owner, repo, token)
 
-    // Grounding: attempt to retrieve package.json and workflow file if relevant
-    let fileContext = {}
-    try {
-      const pkgJson = await getRepoFileContent('package.json', owner, repo)
-      if (pkgJson) fileContext['package.json'] = pkgJson
-      if (details.workflowFile && details.workflowFile !== 'unknown') {
-        const wf = await getRepoFileContent(`.github/workflows/${details.workflowFile}`, owner, repo)
-        if (wf) fileContext[details.workflowFile] = wf
-      }
-    } catch {
-      // Non-blocking grounding attempt
-    }
+    // Context Intelligence: Identify candidate files from error log patterns
+    const { candidateFiles } = resolveRelevantFiles(logs, details)
 
-    // Run AI diagnosis
-    const diagnosis = await diagnosePipeline(details, logs, Object.keys(fileContext).length > 0 ? fileContext : null)
+    // File Grounding: Fetch actual repository file manifests and apply line windowing
+    const groundedFiles = await fetchGroundedFiles(candidateFiles, owner, repo, token)
+
+    // Run grounded AI diagnosis
+    const diagnosis = await diagnosePipeline(details, logs, groundedFiles)
 
     // Cache the result
     store.saveDiagnosis(runId, diagnosis)
@@ -188,6 +196,7 @@ router.post('/pipelines/:id/diagnose', async (req, res) => {
 router.post('/pipelines/:id/fix', async (req, res) => {
   try {
     const { owner, repo } = resolveRepo(req)
+    const token = resolveToken(req)
     const runId = parseInt(req.params.id)
 
     // Check cache first
@@ -196,27 +205,21 @@ router.post('/pipelines/:id/fix', async (req, res) => {
       return res.json({ fix: cachedFix, cached: true })
     }
 
-    // Ensure we have diagnosis
-    let diagnosis = store.getDiagnosis(runId)
-    const details = await getRunDetails(runId, owner, repo)
-    const logs = await getRunLogs(runId, owner, repo)
+    const details = await getRunDetails(runId, owner, repo, token)
+    const logs = await getRunLogs(runId, owner, repo, token)
 
+    // Context Intelligence & Grounding
+    const { candidateFiles } = resolveRelevantFiles(logs, details)
+    const groundedFiles = await fetchGroundedFiles(candidateFiles, owner, repo, token)
+
+    let diagnosis = store.getDiagnosis(runId)
     if (!diagnosis) {
-      diagnosis = await diagnosePipeline(details, logs)
+      diagnosis = await diagnosePipeline(details, logs, groundedFiles)
       store.saveDiagnosis(runId, diagnosis)
     }
 
-    // Grounding context
-    let fileContext = {}
-    try {
-      const pkgJson = await getRepoFileContent('package.json', owner, repo)
-      if (pkgJson) fileContext['package.json'] = pkgJson
-    } catch {
-      // ignore
-    }
-
-    // Generate AI fix
-    const fix = await generateFix(details, logs, diagnosis, Object.keys(fileContext).length > 0 ? fileContext : null)
+    // Generate verified AI fix
+    const fix = await generateFix(details, logs, diagnosis, groundedFiles)
 
     // Cache the result
     store.saveFix(runId, fix)
@@ -241,8 +244,7 @@ router.post('/fixes/apply', async (req, res) => {
       return res.status(400).json({ error: 'runId and fix object are required' })
     }
 
-    const authHeader = req.headers.authorization
-    const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null
+    const token = resolveToken(req)
 
     const prResult = await applyFixAndCreatePR({
       owner,
