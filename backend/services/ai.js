@@ -1,6 +1,9 @@
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import dotenv from 'dotenv'
 import { verifyFix, detectProjectType } from './fixVerification.js'
+import { generateFailureFingerprint } from './failureFingerprint.js'
+import { failureMemoryRepository } from './failureMemory.js'
+import { findSimilarIncidents } from './similaritySearch.js'
 
 dotenv.config()
 
@@ -44,15 +47,59 @@ async function retryWithBackoff(fn, maxRetries = 3) {
 }
 
 /**
- * Analyze CI/CD failure logs and generate a grounded diagnosis
+ * Analyze CI/CD failure logs and generate a grounded diagnosis enriched with historical failure memory
  */
 export async function diagnosePipeline(runDetails, logs, groundedFiles = []) {
   const projectType = detectProjectType(groundedFiles, runDetails)
+  const failedStep = runDetails.stages?.find((s) => s.status === 'failed')?.name || runDetails.name || 'CI Execution'
+
+  // Step 1: Generate deterministic failure fingerprint
+  const fingerprint = generateFailureFingerprint({
+    logs,
+    category: runDetails.category || null,
+    failedStep,
+    exitCode: runDetails.exitCode || 1,
+  })
+
+  // Step 2: Query Failure Memory for similar historical incidents
+  let similarIncidents = []
+  let historicalMetrics = null
+  let recommendedHistoricalFix = null
+
+  try {
+    const similarityResult = await findSimilarIncidents(
+      {
+        exactHash: fingerprint.exactHash,
+        structuralHash: fingerprint.structuralHash,
+        tokens: fingerprint.tokens,
+        failedStep: fingerprint.failedStep,
+        logs,
+      },
+      { repository: failureMemoryRepository, limit: 3, threshold: 0.25 }
+    )
+    similarIncidents = similarityResult.matches || []
+    historicalMetrics = similarityResult.metrics || null
+    recommendedHistoricalFix = similarityResult.metrics?.recommendedHistoricalFix || null
+  } catch (err) {
+    console.warn(`Similar incident search warning: ${err.message}`)
+  }
+
+  // Step 3: Ground repository context
   const fileContextString = Array.isArray(groundedFiles) && groundedFiles.length > 0
     ? groundedFiles.map((f) => `--- File: ${f.path} ---\n${f.content}`).join('\n\n')
     : null
 
-  const prompt = `You are CI Doctor AI, an enterprise-grade CI/CD pipeline debugger and reliability engineer. Analyze the following failed GitHub Actions workflow run and provide an exact, technical diagnosis grounded in actual repository files.
+  // Format historical context for prompt augmentation
+  const historicalContextString = similarIncidents.length > 0
+    ? `## Historical Incident Memory & Prior Resolutions\n` +
+      similarIncidents.map((m, idx) => `Match #${idx + 1} (${m.similarityPercentage} match | ${m.category}):
+- Previous Root Cause: ${m.diagnosis?.rootCause || 'N/A'}
+- Proven Historical Resolution: ${m.fixOutcome?.title || m.diagnosis?.recommendation || 'N/A'}
+- Verification Status: ${m.verificationOutcome?.validationPassed ? 'VERIFIED' : 'UNVERIFIED'}
+- Fix Confidence: ${m.verificationOutcome?.confidenceScore ? `${m.verificationOutcome.confidenceScore}%` : 'N/A'}`).join('\n\n')
+    : null
+
+  const prompt = `You are CI Doctor AI, an enterprise-grade CI/CD pipeline debugger and reliability engineer. Analyze the following failed GitHub Actions workflow run and provide an exact, technical diagnosis grounded in actual repository files and informed by historical failure memory.
 
 ## Workflow Run Info
 - Workflow: ${runDetails.name}
@@ -66,8 +113,8 @@ export async function diagnosePipeline(runDetails, logs, groundedFiles = []) {
 ## Error Logs
 ${logs}
 
-${fileContextString ? `## Grounded Repository Context (With Line Annotations)\n${fileContextString}` : ''}
-
+${fileContextString ? `## Grounded Repository Context (With Line Annotations)\n${fileContextString}\n` : ''}
+${historicalContextString ? `${historicalContextString}\n` : ''}
 ## Instructions
 Analyze the failure and respond with ONLY this JSON structure:
 {
@@ -90,6 +137,8 @@ Analyze the failure and respond with ONLY this JSON structure:
 
 Be specific and technical. Reference exact file names, line numbers, missing variables, and commands.`
 
+  let finalDiagnosis = null
+
   if (model) {
     try {
       const result = await retryWithBackoff(async () => {
@@ -98,7 +147,7 @@ Be specific and technical. Reference exact file names, line numbers, missing var
       const text = result.response.text()
       const diagnosis = JSON.parse(text)
 
-      return {
+      finalDiagnosis = {
         rootCause: diagnosis.rootCause || 'Unable to determine root cause',
         confidence: diagnosis.confidence || '50%',
         severityScore: diagnosis.severityScore || 'P1 - High',
@@ -109,14 +158,64 @@ Be specific and technical. Reference exact file names, line numbers, missing var
         projectType,
         supportingEvidence: Array.isArray(diagnosis.supportingEvidence) ? diagnosis.supportingEvidence : [],
         groundedFilesCount: (groundedFiles || []).length,
+        failureFingerprint: {
+          exactHash: fingerprint.exactHash,
+          structuralHash: fingerprint.structuralHash,
+          normalizedSignature: fingerprint.normalizedSignature,
+        },
+        similarIncidents,
+        historicalMetrics,
+        recommendedHistoricalFix,
       }
     } catch (error) {
       console.error('AI diagnosis error (falling back to pattern matcher):', error.message)
     }
   }
 
-  // Fallback pattern matching with grounded files
-  return generateFallbackDiagnosis(runDetails, logs, groundedFiles)
+  // Fallback pattern matching with grounded files if model failed or unavailable
+  if (!finalDiagnosis) {
+    finalDiagnosis = {
+      ...generateFallbackDiagnosis(runDetails, logs, groundedFiles),
+      failureFingerprint: {
+        exactHash: fingerprint.exactHash,
+        structuralHash: fingerprint.structuralHash,
+        normalizedSignature: fingerprint.normalizedSignature,
+      },
+      similarIncidents,
+      historicalMetrics,
+      recommendedHistoricalFix,
+    }
+  }
+
+  // Step 4: Record current incident into failure memory
+  const incidentId = `inc_${runDetails.id || Date.now()}`
+  const incidentRecord = {
+    id: incidentId,
+    repository: runDetails.repository || `${runDetails.owner || 'techenthusiasticindia'}/${runDetails.repo || 'ci-doctor-ai'}`,
+    runId: runDetails.id || null,
+    workflowName: runDetails.name || 'CI Pipeline',
+    branch: runDetails.branch || 'main',
+    commitSha: runDetails.commit || 'unknown',
+    category: finalDiagnosis.category,
+    failedStep,
+    logs,
+    fingerprint,
+    diagnosis: {
+      rootCause: finalDiagnosis.rootCause,
+      confidence: finalDiagnosis.confidence,
+      severityScore: finalDiagnosis.severityScore,
+      recommendation: finalDiagnosis.recommendation,
+      category: finalDiagnosis.category,
+      affectedFiles: finalDiagnosis.affectedFiles,
+    },
+    createdAt: new Date().toISOString(),
+  }
+
+  failureMemoryRepository.save(incidentRecord).catch((err) => {
+    console.warn(`Could not save incident to failure memory: ${err.message}`)
+  })
+
+  return finalDiagnosis
 }
 
 /**
@@ -126,6 +225,13 @@ export async function generateFix(runDetails, logs, diagnosis, groundedFiles = [
   const projectType = detectProjectType(groundedFiles, runDetails)
   const fileContextString = Array.isArray(groundedFiles) && groundedFiles.length > 0
     ? groundedFiles.map((f) => `--- File: ${f.path} ---\n${f.content}`).join('\n\n')
+    : null
+
+  const historicalFixContext = diagnosis?.recommendedHistoricalFix
+    ? `## Proven Historical Fix Reference (${diagnosis.recommendedHistoricalFix.similarityScore} match from incident ${diagnosis.recommendedHistoricalFix.sourceIncidentId})
+Title: ${diagnosis.recommendedHistoricalFix.title}
+Diff:
+${diagnosis.recommendedHistoricalFix.diff}`
     : null
 
   const prompt = `You are CI Doctor AI, an expert CI/CD pipeline debugger. Based on the diagnosis below, generate an automated recovery patch.
@@ -149,8 +255,8 @@ ${logs}
 - Category: ${diagnosis.category}
 - Recommendation: ${diagnosis.recommendation}
 
-${fileContextString ? `## Grounded Repository Context\n${fileContextString}` : ''}
-
+${fileContextString ? `## Grounded Repository Context\n${fileContextString}\n` : ''}
+${historicalFixContext ? `${historicalFixContext}\n` : ''}
 ## Instructions
 Generate a fix and respond with ONLY this JSON structure:
 {
@@ -204,6 +310,19 @@ Be specific. Show actual code changes in the diff.`
   generatedFix.validation = verification // Backward compatibility
   if (verification.confidenceScore) {
     generatedFix.confidence = `${verification.confidenceScore}%`
+  }
+
+  // Update Failure Memory record with synthesized fix and verification outcome
+  if (runDetails.id) {
+    const incidentId = `inc_${runDetails.id}`
+    failureMemoryRepository.updateOutcome(incidentId, 'fix', {
+      title: generatedFix.title,
+      diff: generatedFix.diff,
+      categoryType: generatedFix.categoryType,
+      filesChanged: generatedFix.filesChanged,
+    }).catch(() => {})
+
+    failureMemoryRepository.updateOutcome(incidentId, 'verification', verification).catch(() => {})
   }
 
   return generatedFix

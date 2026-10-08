@@ -1,4 +1,4 @@
-import { Bot, FileWarning, Sparkles, Loader2, Code2, FileCode, Layers } from "lucide-react"
+import { Bot, FileWarning, Sparkles, Loader2, Code2, FileCode, Layers, History, GitMerge, CheckCircle2, ShieldCheck, Fingerprint } from "lucide-react"
 
 function DiagnosisCard({ data, loading, onDiagnose, hasFailureData }) {
   if (loading) {
@@ -145,6 +145,24 @@ function DiagnosisCard({ data, loading, onDiagnose, hasFailureData }) {
         </div>
       </div>
 
+      {/* DETERMINISTIC FAILURE FINGERPRINT */}
+      {data.failureFingerprint && (
+        <div className="flex items-center justify-between bg-black/30 border border-gray-800 rounded-xl px-3.5 py-2 mb-5 font-mono text-[11px] text-gray-400">
+          <div className="flex items-center gap-1.5 truncate">
+            <Fingerprint className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />
+            <span className="text-gray-500">Fingerprint:</span>
+            <span className="text-blue-300 font-medium truncate" title={data.failureFingerprint.exactHash}>
+              {data.failureFingerprint.exactHash.substring(0, 16)}...
+            </span>
+          </div>
+          {data.failureFingerprint.structuralHash && (
+            <span className="text-gray-500 hidden sm:inline text-[10px]">
+              STRUCTURAL: {data.failureFingerprint.structuralHash.substring(0, 8)}
+            </span>
+          )}
+        </div>
+      )}
+
       {/* AFFECTED FILES */}
       {data.affectedFiles && data.affectedFiles.length > 0 && (
         <div className="bg-black/20 border border-gray-800 rounded-2xl p-5 mb-5">
@@ -215,6 +233,115 @@ function DiagnosisCard({ data, loading, onDiagnose, hasFailureData }) {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* HISTORICAL FAILURE MEMORY & SIMILAR INCIDENTS */}
+      {data.similarIncidents && data.similarIncidents.length > 0 && (
+        <div className="bg-black/25 border border-purple-500/20 rounded-2xl p-5 mb-5 shadow-inner">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <History className="w-4 h-4 text-purple-400" />
+              <h3 className="text-xs font-semibold text-purple-400 uppercase tracking-wider font-mono">
+                Failure Memory &amp; Similar Incidents ({data.similarIncidents.length})
+              </h3>
+            </div>
+            {data.historicalMetrics?.successRate && (
+              <span className="text-[10px] text-purple-300 font-mono bg-purple-500/10 px-2 py-0.5 rounded border border-purple-500/20 flex items-center gap-1">
+                <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                <span>Success Rate: {data.historicalMetrics.successRate}</span>
+              </span>
+            )}
+          </div>
+
+          <div className="space-y-3">
+            {data.similarIncidents.map((inc, index) => {
+              const score = typeof inc.similarityScore === 'number' ? inc.similarityScore : 0
+              const scoreBadgeClass = score >= 0.85
+                ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                : score >= 0.60
+                ? 'bg-blue-500/15 text-blue-300 border-blue-500/30'
+                : 'bg-purple-500/15 text-purple-300 border-purple-500/30'
+
+              const isVerified = inc.verificationOutcome?.validationPassed === true
+              const isMerged = inc.prOutcome?.merged === true
+
+              return (
+                <div
+                  key={inc.id || index}
+                  className="bg-[#0B1020] border border-gray-800 rounded-xl p-3.5 space-y-2 hover:border-purple-500/30 transition-colors"
+                >
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-[10px] font-mono px-2 py-0.5 rounded border font-bold ${scoreBadgeClass}`}>
+                        {inc.similarityPercentage || `${Math.round(score * 100)}%`} MATCH
+                      </span>
+                      <span className="text-xs font-mono text-gray-300 font-medium">
+                        {inc.category?.toUpperCase() || 'FAILURE'} &bull; {inc.failedStep || inc.workflowName || 'CI Step'}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      {isMerged && (
+                        <span className="text-[10px] font-mono bg-purple-500/10 text-purple-300 px-2 py-0.5 rounded border border-purple-500/20 flex items-center gap-1">
+                          <GitMerge className="w-3 h-3 text-purple-400" />
+                          <span>MERGED PR</span>
+                        </span>
+                      )}
+                      {isVerified && (
+                        <span className="text-[10px] font-mono bg-emerald-500/10 text-emerald-300 px-2 py-0.5 rounded border border-emerald-500/20 flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                          <span>VERIFIED RESOLUTION</span>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-gray-300 leading-relaxed">
+                    <span className="text-gray-500 font-mono text-[11px] block mb-0.5">HISTORICAL ROOT CAUSE:</span>
+                    {inc.diagnosis?.rootCause || inc.logs?.substring(0, 150) || 'Previous failure'}
+                  </p>
+
+                  {inc.fixOutcome?.title && (
+                    <div className="bg-black/40 border border-gray-800/80 rounded-lg p-2.5 text-xs text-gray-300 flex items-start gap-2">
+                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <span className="text-gray-400 font-mono text-[10px] uppercase block">Prior Successful Fix:</span>
+                        <span className="text-emerald-300 font-medium">{inc.fixOutcome.title}</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+
+          {/* RECOMMENDED HISTORICAL FIX */}
+          {data.recommendedHistoricalFix && (
+            <div className="mt-4 pt-4 border-t border-gray-800">
+              <div className="bg-gradient-to-r from-emerald-500/10 to-blue-500/10 border border-emerald-500/30 rounded-xl p-3.5">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-1.5">
+                    <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                    <span className="text-xs font-semibold text-emerald-300 font-mono uppercase tracking-wider">
+                      Recommended Historical Fix
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                    {data.recommendedHistoricalFix.similarityScore} CONFIDENCE
+                  </span>
+                </div>
+                <p className="text-xs text-white font-medium mb-2">
+                  {data.recommendedHistoricalFix.title}
+                </p>
+                {data.recommendedHistoricalFix.diff && (
+                  <pre className="text-xs font-mono bg-black/60 border border-gray-800 rounded-lg p-2.5 text-emerald-200/90 overflow-x-auto whitespace-pre-wrap leading-5 max-h-36">
+                    {data.recommendedHistoricalFix.diff}
+                  </pre>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

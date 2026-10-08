@@ -1,6 +1,8 @@
 import express from 'express'
 import cors from 'cors'
 import dotenv from 'dotenv'
+import path from 'path'
+import { fileURLToPath } from 'url'
 import apiRoutes from './routes/api.js'
 import authRoutes from './routes/auth.js'
 
@@ -58,19 +60,26 @@ app.use((err, req, res, next) => {
   })
 })
 
-// Start server
-app.listen(PORT, () => {
-  console.log('')
-  console.log('🩺 ═══════════════════════════════════════')
-  console.log('   CI Doctor AI Backend')
-  console.log('   ─────────────────────────────────────')
-  console.log(`   Server:    http://localhost:${PORT}`)
-  console.log(`   Health:    http://localhost:${PORT}/api/health`)
-  console.log(`   Dashboard: http://localhost:${PORT}/api/dashboard`)
-  console.log('   ─────────────────────────────────────')
-  console.log(`   GitHub:    ${process.env.GITHUB_OWNER}/${process.env.GITHUB_REPO}`)
-  console.log(`   AI:        Gemini ${process.env.GEMINI_API_KEY ? '✅ configured' : '❌ missing key'}`)
-  console.log(`   GitHub:    ${process.env.GITHUB_TOKEN ? '✅ configured' : '❌ missing token'}`)
-  console.log('═══════════════════════════════════════════')
-  console.log('')
-})
+// Start server only when executed directly, not when imported by test suites
+const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+let server = null
+if (isMain) {
+  server = app.listen(PORT, () => {
+    console.log('')
+    console.log('=============================================')
+    console.log('   CI Doctor AI Backend')
+    console.log('   -----------------------------------------')
+    console.log(`   Server:    http://localhost:${PORT}`)
+    console.log(`   Health:    http://localhost:${PORT}/api/health`)
+    console.log(`   Dashboard: http://localhost:${PORT}/api/dashboard`)
+    console.log('   -----------------------------------------')
+    console.log(`   GitHub:    ${process.env.GITHUB_OWNER}/${process.env.GITHUB_REPO}`)
+    console.log(`   AI:        Gemini ${process.env.GEMINI_API_KEY ? '[CONFIGURED]' : '[MISSING KEY]'}`)
+    console.log(`   GitHub:    ${process.env.GITHUB_TOKEN ? '[CONFIGURED]' : '[MISSING TOKEN]'}`)
+    console.log('=============================================')
+    console.log('')
+  })
+}
+
+export { app, server }
+export default app

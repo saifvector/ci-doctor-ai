@@ -1,0 +1,129 @@
+[
+  {
+    "id": "inc_node_missing_test_script",
+    "repository": "techenthusiasticindia/ci-doctor-ai",
+    "runId": 981240,
+    "workflowName": "Deploy Pipeline",
+    "branch": "main",
+    "commitSha": "7f3a9bc",
+    "category": "configuration",
+    "failedStep": "Run Tests",
+    "logs": "npm error Missing script: \"test\"\nnpm error npm test failed with exit code 1",
+    "fingerprint": {
+      "exactHash": "835ca04d0b7dbf6d6fae8c32750eff43762217a30ee0e4003e4ef2b845269bdb",
+      "structuralHash": "99149704504d49508016897250eb6c189f652a1b552f861a8cebd49774e9a052",
+      "category": "configuration",
+      "failedStep": "Run Tests",
+      "exitCode": 1,
+      "signatureSnippet": "npm error Missing script: \"test\"\nnpm error To see a list of scripts, run:\nnpm error npm run",
+      "tokens": [
+        "configuration",
+        "tests",
+        "npm",
+        "missing",
+        "script",
+        "test",
+        "see",
+        "list",
+        "scripts"
+      ],
+      "timestamp": "2026-10-08T06:05:50.012Z"
+    },
+    "diagnosis": {
+      "rootCause": "The pipeline failed because the \"test\" script is missing from package.json.",
+      "confidence": "96%",
+      "severityScore": "P1 - High",
+      "affectedFiles": [
+        "package.json"
+      ],
+      "recommendation": "Add a \"test\" script to package.json: \"test\": \"echo \\\"No tests configured\\\" && exit 0\""
+    },
+    "fixOutcome": {
+      "title": "Fix missing test script in package.json",
+      "categoryType": "configuration",
+      "filesChanged": [
+        "package.json"
+      ],
+      "diff": "--- a/package.json\n+++ b/package.json\n@@ scripts @@\n+  \"test\": \"echo \\\"No tests configured\\\" && exit 0\"",
+      "synthesizedAt": "2026-09-15T14:20:00Z"
+    },
+    "verificationOutcome": {
+      "validationPassed": true,
+      "confidenceScore": 96,
+      "verifiedAt": "2026-09-15T14:21:00Z"
+    },
+    "prOutcome": {
+      "created": true,
+      "prNumber": 42,
+      "prUrl": "https://github.com/techenthusiasticindia/ci-doctor-ai/pull/42",
+      "merged": true,
+      "appliedAt": "2026-09-15T14:25:00Z"
+    },
+    "createdAt": "2026-09-15T14:15:00Z",
+    "updatedAt": "2026-09-15T14:25:00Z"
+  },
+  {
+    "id": "inc_workflow_missing_secret",
+    "repository": "techenthusiasticindia/ci-doctor-ai",
+    "runId": 981245,
+    "workflowName": "Deploy Pipeline",
+    "branch": "main",
+    "commitSha": "9b2c8de",
+    "category": "environment",
+    "failedStep": "Deploy Application",
+    "logs": "Error: API_KEY environment secret is missing from workflow runner context.",
+    "fingerprint": {
+      "exactHash": "70aafe905cf27eba5660d9992d5abe5663c3b08847fc16e112b174bfb7f16900",
+      "structuralHash": "a0a01e3270b092e992e5417cf623cbf17e1a5f948c3ade13a0861c3aebbaea31",
+      "category": "environment",
+      "failedStep": "Deploy Application",
+      "exitCode": 1,
+      "signatureSnippet": "Error: API_KEY is required but was not provided in process.env. UnhandledPromiseRejection",
+      "tokens": [
+        "environment",
+        "deploy",
+        "application",
+        "api_key",
+        "required",
+        "but",
+        "not",
+        "provided",
+        "process.env.",
+        "unhandledpromiserejection"
+      ],
+      "timestamp": "2026-10-08T06:05:50.014Z"
+    },
+    "diagnosis": {
+      "rootCause": "Required API_KEY environment secret is not configured in workflow environment.",
+      "confidence": "95%",
+      "severityScore": "P0 - Critical",
+      "affectedFiles": [
+        ".github/workflows/deploy.yml"
+      ],
+      "recommendation": "Map API_KEY secret from secrets.API_KEY into workflow env block."
+    },
+    "fixOutcome": {
+      "title": "Inject missing API_KEY in CI workflow",
+      "categoryType": "configuration",
+      "filesChanged": [
+        ".github/workflows/deploy.yml"
+      ],
+      "diff": "--- a/.github/workflows/deploy.yml\n+++ b/.github/workflows/deploy.yml\n@@ env @@\n+      API_KEY: ${{ secrets.API_KEY }}",
+      "synthesizedAt": "2026-09-20T09:10:00Z"
+    },
+    "verificationOutcome": {
+      "validationPassed": true,
+      "confidenceScore": 94,
+      "verifiedAt": "2026-09-20T09:11:00Z"
+    },
+    "prOutcome": {
+      "created": true,
+      "prNumber": 58,
+      "prUrl": "https://github.com/techenthusiasticindia/ci-doctor-ai/pull/58",
+      "merged": true,
+      "appliedAt": "2026-09-20T09:15:00Z"
+    },
+    "createdAt": "2026-09-20T09:05:00Z",
+    "updatedAt": "2026-09-20T09:15:00Z"
+  }
+]

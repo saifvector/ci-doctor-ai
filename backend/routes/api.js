@@ -11,6 +11,9 @@ import { diagnosePipeline, generateFix } from '../services/ai.js'
 import { resolveRelevantFiles } from '../services/contextResolver.js'
 import { fetchGroundedFiles } from '../services/fileGrounding.js'
 import { verifyFix } from '../services/fixVerification.js'
+import { failureMemoryRepository } from '../services/failureMemory.js'
+import { generateFailureFingerprint } from '../services/failureFingerprint.js'
+import { findSimilarByIncidentId } from '../services/similaritySearch.js'
 import store from '../services/store.js'
 
 const router = Router()
@@ -308,10 +311,181 @@ router.post('/fixes/apply', async (req, res) => {
     // Increment recoveries counter
     store.recoveryCount++
 
+    // Update failure memory PR outcome asynchronously
+    const incidentId = `inc_${runId}`
+    failureMemoryRepository.updateOutcome(incidentId, 'pr', {
+      prNumber: prResult.prNumber,
+      prUrl: prResult.prUrl,
+      branch: prResult.branch,
+      merged: false,
+    }).catch(() => {})
+
     res.json(prResult)
   } catch (error) {
     console.error('Apply fix error:', error.message)
     res.status(500).json({ error: 'Failed to apply fix: ' + error.message })
+  }
+})
+
+/**
+ * POST /api/incidents
+ * Store structured incident record with deterministic failure fingerprinting
+ */
+router.post('/incidents', async (req, res) => {
+  try {
+    const { repository, runId, logs, category, failedStep } = req.body
+
+    // Input Validation
+    if (!repository || typeof repository !== 'string') {
+      return res.status(400).json({
+        error: 'Validation failed: "repository" is required and must be a string',
+        code: 'ERR_INVALID_INPUT',
+      })
+    }
+
+    if (!logs || typeof logs !== 'string') {
+      return res.status(400).json({
+        error: 'Validation failed: "logs" is required and must be a string',
+        code: 'ERR_INVALID_INPUT',
+      })
+    }
+
+    // Generate failure fingerprint if not supplied
+    const fingerprint = req.body.fingerprint || generateFailureFingerprint({
+      logs,
+      category: category || null,
+      failedStep: failedStep || 'CI Execution',
+      exitCode: req.body.exitCode || 1,
+    })
+
+    const incidentId = req.body.id || `inc_${runId || Date.now()}_${Math.random().toString(36).substring(2, 7)}`
+    const now = new Date().toISOString()
+
+    const incident = {
+      id: incidentId,
+      repository: repository.trim(),
+      runId: runId ? Number(runId) : null,
+      workflowName: req.body.workflowName || 'CI Pipeline',
+      branch: req.body.branch || 'main',
+      commitSha: req.body.commitSha || 'unknown',
+      category: category || 'unknown',
+      failedStep: failedStep || 'CI Execution',
+      logs,
+      fingerprint,
+      diagnosis: req.body.diagnosis || null,
+      fixOutcome: req.body.fixOutcome || null,
+      verificationOutcome: req.body.verificationOutcome || null,
+      prOutcome: req.body.prOutcome || null,
+      createdAt: req.body.createdAt || now,
+      updatedAt: now,
+    }
+
+    const saved = await failureMemoryRepository.save(incident)
+    res.status(201).json({ success: true, incident: saved })
+  } catch (error) {
+    console.error('Save incident error:', error.message)
+    res.status(500).json({
+      error: 'Failed to record failure memory incident: ' + error.message,
+      code: 'ERR_SAVE_INCIDENT_FAILED',
+    })
+  }
+})
+
+/**
+ * GET /api/incidents/search
+ * Search failure memory incidents with filtering and pagination
+ */
+router.get('/incidents/search', async (req, res) => {
+  try {
+    const { query, category, repository, limit, offset } = req.query
+    const parsedLimit = Math.min(Math.max(parseInt(limit) || 20, 1), 100)
+    const parsedOffset = Math.max(parseInt(offset) || 0, 0)
+
+    const result = await failureMemoryRepository.findMany({
+      query: query ? String(query) : null,
+      category: category ? String(category) : null,
+      repository: repository ? String(repository) : null,
+      limit: parsedLimit,
+      offset: parsedOffset,
+    })
+
+    res.json({
+      success: true,
+      ...result,
+    })
+  } catch (error) {
+    console.error('Search incidents error:', error.message)
+    res.status(500).json({
+      error: 'Failed to search failure memory incidents: ' + error.message,
+      code: 'ERR_SEARCH_INCIDENTS_FAILED',
+    })
+  }
+})
+
+/**
+ * GET /api/incidents/similar/:id
+ * Retrieve ranked similar historical incidents for an existing incident record
+ */
+router.get('/incidents/similar/:id', async (req, res) => {
+  try {
+    const incidentId = req.params.id
+    const threshold = req.query.threshold ? parseFloat(req.query.threshold) : 0.30
+    const limit = req.query.limit ? parseInt(req.query.limit) : 5
+
+    if (isNaN(threshold) || threshold < 0 || threshold > 1) {
+      return res.status(400).json({
+        error: 'Validation failed: "threshold" must be a float between 0.0 and 1.0',
+        code: 'ERR_INVALID_THRESHOLD',
+      })
+    }
+
+    const result = await findSimilarByIncidentId(incidentId, {
+      threshold,
+      limit: Math.min(Math.max(limit, 1), 20),
+    })
+
+    res.json({
+      success: true,
+      incidentId,
+      matches: result.matches,
+      metrics: result.metrics,
+    })
+  } catch (error) {
+    if (error.code === 'ERR_INCIDENT_NOT_FOUND' || error.statusCode === 404) {
+      return res.status(404).json({
+        error: error.message,
+        code: 'ERR_INCIDENT_NOT_FOUND',
+      })
+    }
+    console.error('Similar incident retrieval error:', error.message)
+    res.status(500).json({
+      error: 'Failed to retrieve similar incidents: ' + error.message,
+      code: 'ERR_SIMILAR_INCIDENTS_FAILED',
+    })
+  }
+})
+
+/**
+ * GET /api/incidents/:id
+ * Get single incident by ID
+ */
+router.get('/incidents/:id', async (req, res) => {
+  try {
+    const incident = await failureMemoryRepository.findById(req.params.id)
+    if (!incident) {
+      return res.status(404).json({
+        error: `Incident with ID "${req.params.id}" was not found`,
+        code: 'ERR_INCIDENT_NOT_FOUND',
+      })
+    }
+
+    res.json({ success: true, incident })
+  } catch (error) {
+    console.error('Get incident error:', error.message)
+    res.status(500).json({
+      error: 'Failed to retrieve incident: ' + error.message,
+      code: 'ERR_GET_INCIDENT_FAILED',
+    })
   }
 })
 
