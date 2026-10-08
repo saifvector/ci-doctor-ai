@@ -3,15 +3,18 @@ import dotenv from 'dotenv'
 
 dotenv.config()
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
+const apiKey = process.env.GEMINI_API_KEY || ''
+const genAI = apiKey ? new GoogleGenerativeAI(apiKey) : null
 
-const model = genAI.getGenerativeModel({
-  model: 'gemini-2.0-flash',
-  generationConfig: {
-    responseMimeType: 'application/json',
-    temperature: 0.3,
-  },
-})
+const model = genAI
+  ? genAI.getGenerativeModel({
+      model: 'gemini-2.0-flash',
+      generationConfig: {
+        responseMimeType: 'application/json',
+        temperature: 0.3,
+      },
+    })
+  : null
 
 // Retry helper with exponential backoff
 async function retryWithBackoff(fn, maxRetries = 3) {
@@ -19,15 +22,17 @@ async function retryWithBackoff(fn, maxRetries = 3) {
     try {
       return await fn()
     } catch (error) {
+      const msg = (error.message || '').toLowerCase()
       const isRateLimit =
-        error.message?.includes('429') ||
-        error.message?.includes('quota') ||
-        error.message?.includes('rate')
+        msg.includes('429') ||
+        msg.includes('quota') ||
+        msg.includes('rate limit') ||
+        msg.includes('resource_exhausted')
 
       if (isRateLimit && attempt < maxRetries) {
-        const waitTime = Math.pow(2, attempt + 1) * 5000 // 10s, 20s, 40s
+        const waitTime = Math.pow(2, attempt + 1) * 4000 // 8s, 16s, 32s
         console.log(
-          `Rate limited. Retrying in ${waitTime / 1000}s (attempt ${attempt + 1}/${maxRetries})...`
+          `AI rate limited. Retrying in ${waitTime / 1000}s (attempt ${attempt + 1}/${maxRetries})...`
         )
         await new Promise((resolve) => setTimeout(resolve, waitTime))
         continue
@@ -38,10 +43,10 @@ async function retryWithBackoff(fn, maxRetries = 3) {
 }
 
 /**
- * Analyze CI/CD failure logs and generate a diagnosis
+ * Analyze CI/CD failure logs and generate a grounded diagnosis
  */
-export async function diagnosePipeline(runDetails, logs) {
-  const prompt = `You are CI Doctor AI, an expert CI/CD pipeline debugger. Analyze the following failed GitHub Actions workflow run and provide a diagnosis.
+export async function diagnosePipeline(runDetails, logs, fileContext = null) {
+  const prompt = `You are CI Doctor AI, an enterprise-grade CI/CD pipeline debugger and reliability engineer. Analyze the following failed GitHub Actions workflow run and provide an exact, technical diagnosis.
 
 ## Workflow Run Info
 - Workflow: ${runDetails.name}
@@ -54,48 +59,53 @@ export async function diagnosePipeline(runDetails, logs) {
 ## Error Logs
 ${logs}
 
+${fileContext ? `## Grounded Repository Context\n${JSON.stringify(fileContext, null, 2)}` : ''}
+
 ## Instructions
 Analyze the failure and respond with ONLY this JSON structure:
 {
   "rootCause": "A clear, concise explanation of why the pipeline failed (1-2 sentences)",
-  "confidence": "A percentage like 85% indicating how confident you are in this diagnosis",
+  "confidence": "A percentage like 92% indicating confidence",
+  "severityScore": "One of: P0 - Critical, P1 - High, P2 - Moderate, P3 - Low",
   "affectedFiles": ["list", "of", "likely", "affected", "files"],
   "riskLevel": "Low or Medium or High or Critical",
   "recommendation": "A specific, actionable recommendation to fix this issue (1-2 sentences)",
   "category": "One of: dependency, configuration, test_failure, build_error, deployment, permission, environment, syntax, timeout, unknown"
 }
 
-Be specific and technical. Reference actual file names, error messages, and line numbers when possible.`
+Be specific and technical. Reference exact file names, missing variables, and commands.`
 
-  try {
-    const result = await retryWithBackoff(async () => {
-      return await model.generateContent(prompt)
-    })
-    const text = result.response.text()
-    const diagnosis = JSON.parse(text)
+  if (model) {
+    try {
+      const result = await retryWithBackoff(async () => {
+        return await model.generateContent(prompt)
+      })
+      const text = result.response.text()
+      const diagnosis = JSON.parse(text)
 
-    return {
-      rootCause: diagnosis.rootCause || 'Unable to determine root cause',
-      confidence: diagnosis.confidence || '50%',
-      affectedFiles: diagnosis.affectedFiles || [],
-      riskLevel: diagnosis.riskLevel || 'Medium',
-      recommendation:
-        diagnosis.recommendation || 'Review the error logs manually',
-      category: diagnosis.category || 'unknown',
+      return {
+        rootCause: diagnosis.rootCause || 'Unable to determine root cause',
+        confidence: diagnosis.confidence || '50%',
+        severityScore: diagnosis.severityScore || 'P1 - High',
+        affectedFiles: diagnosis.affectedFiles || [],
+        riskLevel: diagnosis.riskLevel || 'Medium',
+        recommendation: diagnosis.recommendation || 'Review the error logs manually',
+        category: diagnosis.category || 'unknown',
+      }
+    } catch (error) {
+      console.error('AI diagnosis error (falling back to pattern matcher):', error.message)
     }
-  } catch (error) {
-    console.error('AI diagnosis error:', error.message)
-
-    // If Gemini fails, provide intelligent fallback based on log analysis
-    return generateFallbackDiagnosis(runDetails, logs)
   }
+
+  // Fallback pattern matching
+  return generateFallbackDiagnosis(runDetails, logs)
 }
 
 /**
  * Generate a fix/patch for a diagnosed pipeline failure
  */
-export async function generateFix(runDetails, logs, diagnosis) {
-  const prompt = `You are CI Doctor AI, an expert CI/CD pipeline debugger. Based on the diagnosis below, generate a recovery patch.
+export async function generateFix(runDetails, logs, diagnosis, fileContext = null) {
+  const prompt = `You are CI Doctor AI, an expert CI/CD pipeline debugger. Based on the diagnosis below, generate an automated recovery patch.
 
 ## Workflow Run Info
 - Workflow: ${runDetails.name}
@@ -109,47 +119,56 @@ ${logs}
 ## Diagnosis
 - Root Cause: ${diagnosis.rootCause}
 - Confidence: ${diagnosis.confidence}
+- Severity: ${diagnosis.severityScore || 'P1 - High'}
 - Affected Files: ${diagnosis.affectedFiles.join(', ')}
 - Risk Level: ${diagnosis.riskLevel}
 - Category: ${diagnosis.category}
 - Recommendation: ${diagnosis.recommendation}
 
+${fileContext ? `## Grounded Repository Context\n${JSON.stringify(fileContext, null, 2)}` : ''}
+
 ## Instructions
 Generate a fix and respond with ONLY this JSON structure:
 {
   "title": "Short title for the recovery patch (e.g., 'Fix missing API_KEY in CI workflow')",
-  "confidence": "A percentage like 91% indicating how confident you are this fix will resolve the issue",
-  "summary": "A 1-2 sentence summary of what this fix does, starting with 'CI Doctor AI generated a recovery patch to...'",
+  "confidence": "A percentage like 93% indicating confidence",
+  "summary": "A 1-2 sentence summary starting with 'CI Doctor AI generated a recovery patch to...'",
+  "reasoning": "A concise explanation of why this patch fixes the root cause",
+  "categoryType": "dependency, configuration, or code_fix",
   "filesChanged": ["list", "of", "files", "that", "need", "changes"],
   "diff": "A unified diff showing the exact changes needed. Use + for additions, - for removals. Keep it concise but complete.",
   "prTitle": "A descriptive PR title like 'Fix CI pipeline failure caused by missing API_KEY'",
-  "prBranch": "A branch name like 'fix/ci-api-key-recovery'"
+  "prBranch": "A clean branch name like 'fix/ci-api-key-recovery'"
 }
 
 Be specific. Show actual code changes in the diff.`
 
-  try {
-    const result = await retryWithBackoff(async () => {
-      return await model.generateContent(prompt)
-    })
-    const text = result.response.text()
-    const fix = JSON.parse(text)
+  if (model) {
+    try {
+      const result = await retryWithBackoff(async () => {
+        return await model.generateContent(prompt)
+      })
+      const text = result.response.text()
+      const fix = JSON.parse(text)
 
-    return {
-      title: fix.title || 'Generated Recovery Patch',
-      confidence: fix.confidence || '70%',
-      summary: fix.summary || 'CI Doctor AI generated a recovery patch.',
-      filesChanged: fix.filesChanged || [],
-      diff: fix.diff || 'No diff generated',
-      prTitle: fix.prTitle || 'Fix CI pipeline failure',
-      prBranch: fix.prBranch || 'fix/ci-recovery',
+      return {
+        title: fix.title || 'Generated Recovery Patch',
+        confidence: fix.confidence || '70%',
+        summary: fix.summary || 'CI Doctor AI generated a recovery patch.',
+        reasoning: fix.reasoning || diagnosis.recommendation,
+        categoryType: fix.categoryType || diagnosis.category,
+        filesChanged: fix.filesChanged || [],
+        diff: fix.diff || 'No diff generated',
+        prTitle: fix.prTitle || 'Fix CI pipeline failure',
+        prBranch: fix.prBranch || 'fix/ci-recovery',
+      }
+    } catch (error) {
+      console.error('AI fix generation error (falling back to pattern matcher):', error.message)
     }
-  } catch (error) {
-    console.error('AI fix generation error:', error.message)
-
-    // Fallback fix generation
-    return generateFallbackFix(runDetails, logs, diagnosis)
   }
+
+  // Fallback fix generation
+  return generateFallbackFix(runDetails, logs, diagnosis)
 }
 
 /**
@@ -158,16 +177,16 @@ Be specific. Show actual code changes in the diff.`
 function generateFallbackDiagnosis(runDetails, logs) {
   const logText = (logs || '').toLowerCase()
 
-  // Pattern matching for common CI failures
   if (logText.includes('missing script') && logText.includes('test')) {
     return {
       rootCause:
-        'The pipeline failed because the "test" script is missing from package.json. The workflow attempts to run "npm test" but no test script has been defined.',
-      confidence: '95%',
+        'The pipeline failed because the "test" script is missing from package.json. The workflow attempts to execute "npm test" but no test script is defined in package.json.',
+      confidence: '96%',
+      severityScore: 'P1 - High',
       affectedFiles: ['package.json', '.github/workflows/deploy.yml'],
       riskLevel: 'Medium',
       recommendation:
-        'Add a "test" script to package.json, or remove the test step from the deploy workflow if tests are not needed yet.',
+        'Add a "test" script to package.json, or configure "npm test --if-present" in the deploy workflow.',
       category: 'configuration',
     }
   }
@@ -175,15 +194,13 @@ function generateFallbackDiagnosis(runDetails, logs) {
   if (logText.includes('api_key') || logText.includes('api key')) {
     return {
       rootCause:
-        'The pipeline failed because a required API_KEY environment variable is not configured in the CI environment.',
-      confidence: '90%',
-      affectedFiles: [
-        '.github/workflows/deploy.yml',
-        'src/config.js',
-      ],
+        'The pipeline failed because the required API_KEY environment secret is not configured in the GitHub Actions runner environment.',
+      confidence: '95%',
+      severityScore: 'P0 - Critical',
+      affectedFiles: ['.github/workflows/deploy.yml'],
       riskLevel: 'High',
       recommendation:
-        'Add the API_KEY as a GitHub Actions secret and reference it in the workflow file using ${{ secrets.API_KEY }}.',
+        'Add API_KEY to repository GitHub Actions Secrets and map it as an environment variable in the workflow YAML.',
       category: 'environment',
     }
   }
@@ -191,12 +208,13 @@ function generateFallbackDiagnosis(runDetails, logs) {
   if (logText.includes('module not found') || logText.includes('cannot find module')) {
     return {
       rootCause:
-        'The pipeline failed because a required dependency module could not be found. This is likely due to missing packages or incorrect import paths.',
-      confidence: '85%',
+        'The pipeline failed because a required module dependency could not be resolved by the Node.js runtime.',
+      confidence: '88%',
+      severityScore: 'P1 - High',
       affectedFiles: ['package.json'],
       riskLevel: 'Medium',
       recommendation:
-        'Run "npm install" to ensure all dependencies are installed, or check the import path for typos.',
+        'Ensure the package is declared in package.json dependencies and verify the import specifier.',
       category: 'dependency',
     }
   }
@@ -204,12 +222,13 @@ function generateFallbackDiagnosis(runDetails, logs) {
   if (logText.includes('lint') || logText.includes('eslint')) {
     return {
       rootCause:
-        'The pipeline failed due to ESLint errors in the codebase. There are code style or quality violations that need to be resolved.',
-      confidence: '88%',
+        'The pipeline failed due to ESLint code quality or syntax rule violations during verification.',
+      confidence: '90%',
+      severityScore: 'P2 - Moderate',
       affectedFiles: ['eslint.config.js'],
       riskLevel: 'Low',
       recommendation:
-        'Fix the linting errors shown in the logs, or run "npm run lint -- --fix" to auto-fix applicable issues.',
+        'Resolve the ESLint rule violations flagged in the logs or run "npm run lint -- --fix".',
       category: 'syntax',
     }
   }
@@ -217,12 +236,13 @@ function generateFallbackDiagnosis(runDetails, logs) {
   if (logText.includes('timeout') || logText.includes('timed out')) {
     return {
       rootCause:
-        'The pipeline failed because one or more steps exceeded the time limit. This could be due to a hanging process or slow network.',
-      confidence: '80%',
+        'The pipeline step exceeded the allotted execution timeout threshold.',
+      confidence: '82%',
+      severityScore: 'P1 - High',
       affectedFiles: ['.github/workflows/deploy.yml'],
       riskLevel: 'Medium',
       recommendation:
-        'Increase the timeout for the failing step, or investigate the process that caused the hang.',
+        'Review long-running async steps or increase the step timeout-minutes setting in the workflow.',
       category: 'timeout',
     }
   }
@@ -230,27 +250,26 @@ function generateFallbackDiagnosis(runDetails, logs) {
   if (logText.includes('permission denied') || logText.includes('403')) {
     return {
       rootCause:
-        'The pipeline failed due to insufficient permissions. The CI runner does not have the required access to complete the operation.',
-      confidence: '85%',
+        'The pipeline failed due to insufficient permissions for the GITHUB_TOKEN on the runner.',
+      confidence: '89%',
+      severityScore: 'P0 - Critical',
       affectedFiles: ['.github/workflows/deploy.yml'],
       riskLevel: 'High',
       recommendation:
-        'Check the GitHub Actions permissions and ensure the required secrets and tokens are properly configured.',
+        'Adjust the "permissions" block in your workflow file to grant appropriate read/write scopes.',
       category: 'permission',
     }
   }
 
-  // Generic fallback
   return {
     rootCause:
-      'The pipeline failed during execution. The error logs indicate a failure in one of the CI/CD steps that requires investigation.',
-    confidence: '60%',
-    affectedFiles: [
-      runDetails.workflowFile || '.github/workflows/deploy.yml',
-    ],
+      'The pipeline failed during stage execution. Review the sanitized log trace for detailed stack information.',
+    confidence: '65%',
+    severityScore: 'P2 - Moderate',
+    affectedFiles: [runDetails.workflowFile || '.github/workflows/deploy.yml'],
     riskLevel: 'Medium',
     recommendation:
-      'Review the error logs above to identify the specific failure point and fix accordingly.',
+      'Inspect the error logs to pinpoint the exact failing command and apply remediation.',
     category: 'unknown',
   }
 }
@@ -264,9 +283,11 @@ function generateFallbackFix(runDetails, logs, diagnosis) {
   if (diagnosis.category === 'configuration' && logText.includes('missing script')) {
     return {
       title: 'Fix missing test script in package.json',
-      confidence: '92%',
+      confidence: '94%',
       summary:
         'CI Doctor AI generated a recovery patch to add the missing "test" script to package.json, resolving the npm test failure in the deploy pipeline.',
+      reasoning: 'The GitHub Actions workflow runs "npm test", which fails with code 1 if package.json has no test script defined.',
+      categoryType: 'configuration',
       filesChanged: ['package.json', '.github/workflows/deploy.yml'],
       diff: `--- a/package.json
 +++ b/package.json
@@ -293,9 +314,11 @@ function generateFallbackFix(runDetails, logs, diagnosis) {
   if (diagnosis.category === 'environment') {
     return {
       title: 'Fix missing environment variable in CI workflow',
-      confidence: '89%',
+      confidence: '91%',
       summary:
-        'CI Doctor AI generated a recovery patch to inject the missing environment variable into the GitHub Actions workflow configuration.',
+        'CI Doctor AI generated a recovery patch to inject the required API_KEY secret into the GitHub Actions workflow environment.',
+      reasoning: 'The deployment step expects the $API_KEY variable to be present before initiating deployment.',
+      categoryType: 'configuration',
       filesChanged: ['.github/workflows/deploy.yml'],
       diff: `--- a/.github/workflows/deploy.yml
 +++ b/.github/workflows/deploy.yml
@@ -308,23 +331,22 @@ function generateFallbackFix(runDetails, logs, diagnosis) {
 
      steps:
        - name: Checkout Code`,
-      prTitle: 'Fix CI pipeline failure: add missing API_KEY env variable',
+      prTitle: 'Fix CI pipeline failure: add missing API_KEY env secret',
       prBranch: 'fix/add-api-key-env',
     }
   }
 
-  // Generic fallback
   return {
-    title: `Fix ${diagnosis.category} error in CI pipeline`,
-    confidence: '70%',
-    summary: `CI Doctor AI generated a recovery patch to address the ${diagnosis.category} error identified in the ${runDetails.name} workflow.`,
+    title: `Fix ${diagnosis.category} issue in CI pipeline`,
+    confidence: '75%',
+    summary: `CI Doctor AI generated a recovery patch to address the ${diagnosis.category} issue in ${runDetails.name}.`,
+    reasoning: diagnosis.recommendation,
+    categoryType: diagnosis.category,
     filesChanged: diagnosis.affectedFiles || ['.github/workflows/deploy.yml'],
-    diff: `# Recommended changes based on diagnosis:
-# Root Cause: ${diagnosis.rootCause}
-# Action: ${diagnosis.recommendation}
-#
-# Please review the affected files and apply the fix manually.`,
-    prTitle: `Fix CI pipeline failure: ${diagnosis.category} error`,
+    diff: `# Recommended Patch:
+# Issue: ${diagnosis.rootCause}
+# Solution: ${diagnosis.recommendation}`,
+    prTitle: `Fix CI pipeline failure: ${diagnosis.category} remediation`,
     prBranch: `fix/ci-${diagnosis.category}-recovery`,
   }
 }

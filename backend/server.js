@@ -2,6 +2,7 @@ import express from 'express'
 import cors from 'cors'
 import dotenv from 'dotenv'
 import apiRoutes from './routes/api.js'
+import authRoutes from './routes/auth.js'
 
 dotenv.config()
 
@@ -23,7 +24,8 @@ app.use((req, res, next) => {
   next()
 })
 
-// API Routes
+// Auth and API Routes
+app.use('/api/auth', authRoutes)
 app.use('/api', apiRoutes)
 
 // Root endpoint
@@ -33,12 +35,16 @@ app.get('/', (req, res) => {
     description: 'AI-powered CI/CD pipeline debugger',
     version: '1.0.0',
     endpoints: {
+      authMe: '/api/auth/me',
+      authLogin: '/api/auth/login',
       health: '/api/health',
+      repos: '/api/repos',
       dashboard: '/api/dashboard',
       pipelines: '/api/pipelines',
       failure: '/api/pipelines/:id/failure',
       diagnose: '/api/pipelines/:id/diagnose (POST)',
       fix: '/api/pipelines/:id/fix (POST)',
+      applyFix: '/api/fixes/apply (POST)',
     },
   })
 })
